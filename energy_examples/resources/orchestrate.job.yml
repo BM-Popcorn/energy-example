@@ -1,0 +1,26 @@
+# A sample job for energy_examples.
+
+resources:
+  jobs:
+    orchestrate:
+      name: orchestrate
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+
+      tasks:
+        - task_key: historical_data
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.historical_turbine_data_sdp.id}
+            
+        - task_key: turbine_data
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.turbine_data_sdp.id}      
+          depends_on:
+            - task_key: historical_data                  
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
