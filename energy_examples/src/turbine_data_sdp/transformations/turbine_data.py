@@ -1,5 +1,5 @@
 from pyspark import pipelines as dp
-from pyspark.sql.functions import col, expr, min, max, avg, stddev, to_date, round, lit
+from pyspark.sql.functions import col, expr, min, max, avg, stddev, to_date, round, lit, array, when
 
 # Bronze: Ingest raw CSV files
 @dp.table(
@@ -29,19 +29,22 @@ def power_output_stats():
         .join(stats, on=["turbine_id"], how="left")
     )
 
-# Row-level quality rules (no subqueries)
+# Updated row-level quality rules: combine null and >= 0 checks
 rules = {
-    "no nulls in turbine_id": "turbine_id IS NOT NULL",
-    "no nulls in wind_speed": "wind_speed IS NOT NULL",
-    "no nulls in wind_direction": "wind_direction IS NOT NULL",
-    "no nulls in power_output": "power_output IS NOT NULL",
-    "wind_speed positive": "wind_speed >= 0",
-    "wind_direction positive": "wind_direction >= 0",
-    "power_output positive": "power_output >= 0",
-    "within_statistical_range": "lower_bound IS NULL OR power_output BETWEEN lower_bound AND upper_bound"
+    "turbine_id valid": "(turbine_id IS NOT NULL)",
+    "wind_speed valid": "(wind_speed IS NOT NULL AND wind_speed >= 0)",
+    "wind_direction valid": "(wind_direction IS NOT NULL AND wind_direction >= 0)",
+    "power_output valid": "(power_output IS NOT NULL AND power_output >= 0)",
+    "statistical_bounds": "(lower_bound IS NULL OR power_output BETWEEN lower_bound AND upper_bound)"
 }
 
 quarantine_rules = "NOT({0})".format(" AND ".join(rules.values()))
+
+# Generate quarantine reason array
+quarantine_expressions = [
+    when(~expr(r), lit(name)).otherwise(lit(None))
+    for name, r in rules.items()
+]
 
 # Silver: Clean energy data with statistical outlier detection via join
 @dp.table(
@@ -53,6 +56,7 @@ def silver_turbine_data():
     return (
         spark.readStream.table("power_output_stats")
         .withColumn("is_quarantined", expr(quarantine_rules))
+        .withColumn("quarantine_reasons", array(*quarantine_expressions))
     )
 
 @dp.view(
